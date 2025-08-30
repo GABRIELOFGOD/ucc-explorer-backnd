@@ -398,7 +398,8 @@ function getDbPool() {
 async function getKnownTokenContracts() {
   try {
     const db = getDbPool();
-    const [rows] = await db.query('SELECT address FROM contracts');
+    const [rows] = await db.query('SELECT address, isVerified FROM contracts');
+    // console.log(rows);
     return rows.map(r => r.address);
   } catch (err) {
     console.error('Error fetching token contracts from DB:', err);
@@ -418,6 +419,7 @@ async function indexContractsFromChain(web3, fromBlock = 100000, toBlock = "late
       console.log(`📦 Scanning blocks ${start} → ${end}`);
 
       const blocks = await Promise.all(
+
         Array.from({ length: end - start + 1 }, (_, i) =>
           web3.eth.getBlock(start + i, true)
         )
@@ -450,16 +452,16 @@ async function indexContractsFromChain(web3, fromBlock = 100000, toBlock = "late
                 }
 
                 // Debug log before insert
-                console.log("📝 Preparing to save contract:", {
-                  address: receipt.contractAddress,
-                  creator: tx.from,
-                  block: block.number,
-                  timestamp: block.timestamp,
-                  type: isERC20 ? "ERC20" : "other",
-                  symbol,
-                  totalSupply,
-                  decimals,
-                });
+                // console.log("📝 Preparing to save contract:", {
+                //   address: receipt.contractAddress,
+                //   creator: tx.from,
+                //   block: block.number,
+                //   timestamp: block.timestamp,
+                //   type: isERC20 ? "ERC20" : "other",
+                //   symbol,
+                //   totalSupply,
+                //   decimals,
+                // });
 
                 // Insert / update into DB
                 try {
@@ -493,7 +495,7 @@ async function indexContractsFromChain(web3, fromBlock = 100000, toBlock = "late
                   console.error(`❌ DB error for contract ${receipt.contractAddress}:`, dbErr);
                 }
 
-                console.log(
+                (
                   `🆕 Contract found: ${receipt.contractAddress} (type: ${
                     isERC20 ? "ERC20" : "other"
                   }, symbol: ${symbol || "-"})`
@@ -512,7 +514,7 @@ async function indexContractsFromChain(web3, fromBlock = 100000, toBlock = "late
 
     console.log("✅ Initial contract indexing finished.");
   } catch (err) {
-    console.error("❌ Error indexing contracts:", err);
+    console.error("console.log❌ Error indexing contracts:", err);
   }
 }
 
