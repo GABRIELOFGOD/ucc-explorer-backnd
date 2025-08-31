@@ -56,10 +56,10 @@ app.use(express.json());
 app.use(express.static("public"));
 
 const RPC_WS = "ws://168.231.122.245:8546";
-const RPC_API = "http://168.231.122.245:8545";
+const RPC_API = "https://rpc.ucscan.net";
 
 // Initialize Web3 with the RPC endpoint
-const web3 = new Web3("http://168.231.122.245:8545");
+const web3 = new Web3("https://rpc.ucscan.net");
 const web3Ws = new Web3(RPC_WS);
 
 // Helper function to extract imports from source code
@@ -2919,7 +2919,7 @@ app.post("/api/login", async (req, res) => {
 // Start server
 server.listen(PORT, () => {
   console.log(`Universe Chain Explorer backend running on port ${PORT}`);
-  console.log(`Connecting to RPC: http://168.231.122.245:8545`);
+  console.log(`Connecting to RPC: https://rpc.ucscan.net`);
   console.log(`Chain ID: 1366`);
   console.log(`WebSocket server running on port ${PORT}`);
 });
