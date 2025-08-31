@@ -1049,6 +1049,16 @@ app.get("/api/blocks/:number", authenticate, rateLimiter, async (req, res) => {
 
 // Get transaction by hash
 
+app.get("/api/verified-tokens", authenticate, rateLimiter, async (req, res) => {
+  try {
+    const [rows] = await db.execute(`SELECT address FROM contracts WHERE isVerified = 1`);
+    res.json([...rows.map(r => r.address)]);
+  } catch (error) {
+    console.error("Error fetching verified tokens:", error);
+    res.status(500).json({ error: "Failed to fetch verified tokens" });
+  }
+});
+
 app.get("/api/transactions", authenticate, rateLimiter, async (req, res) => {
   try {
     // Parse and validate page/limit query params
@@ -1566,7 +1576,6 @@ app.get(
       if (isContract) {
         contractInfo = await getContractVerificationData(address.toLowerCase());
         isVerified = contractInfo.isVerified; // Get the actual verification status
-        console.log("Contract info:", contractInfo);
       }
 
       
