@@ -19,6 +19,7 @@ const {
   getTokenHolders,
   getKnownTokenContracts,
   indexContractsFromChain,
+  indexTransactionsFromChain,
 } = require("./utils");
 
 
@@ -59,7 +60,7 @@ const RPC_WS = "ws://168.231.122.245:8546";
 const RPC_API = "https://rpc.ucscan.net";
 
 // Initialize Web3 with the RPC endpoint
-const web3 = new Web3("https://rpc.ucscan.net");
+const web3 = new Web3(RPC_API);
 const web3Ws = new Web3(RPC_WS);
 
 // Helper function to extract imports from source code
@@ -720,7 +721,7 @@ web3Ws.eth
 
       for (const tx of block.transactions) {
         // Save transaction
-        await db.execute(
+        const txSaved = await db.execute(
           `INSERT IGNORE INTO transactions 
             (hash, blockNumber, fromAddress, toAddress, value, gas, gasPrice, timestamp)
            VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
@@ -736,84 +737,86 @@ web3Ws.eth
           ]
         );
 
+        console.log("Saved TX", txSaved);
+
         // Detect contract creation (to == null)
-        // if (!tx.to) {
-        //   try {
-        //     const receipt = await web3Ws.eth.getTransactionReceipt(tx.hash);
-        //     if (receipt && receipt.contractAddress) {
-        //       let isERC20 = false;
-        //       let symbol = null;
-        //       let totalSupply = null;
-        //       let decimals = null;
+        if (!tx.to) {
+          try {
+            const receipt = await web3Ws.eth.getTransactionReceipt(tx.hash);
+            if (receipt && receipt.contractAddress) {
+              let isERC20 = false;
+              let symbol = null;
+              let totalSupply = null;
+              let decimals = null;
 
-        //       try {
-        //         const contract = new web3Ws.eth.Contract(
-        //           require("./utils").ERC20_ABI,
-        //           receipt.contractAddress
-        //         );
+              try {
+                const contract = new web3Ws.eth.Contract(
+                  require("./utils").ERC20_ABI,
+                  receipt.contractAddress
+                );
 
-        //         totalSupply = await contract.methods.totalSupply().call();
-        //         symbol = await contract.methods.symbol().call();
-        //         decimals = await contract.methods.decimals().call();
-        //         isERC20 = true;
-        //       } catch (e) {
-        //         console.log(`ℹ️ Not ERC20: ${receipt.contractAddress}`);
-        //       }
+                totalSupply = await contract.methods.totalSupply().call();
+                symbol = await contract.methods.symbol().call();
+                decimals = await contract.methods.decimals().call();
+                isERC20 = true;
+              } catch (e) {
+                console.log(`ℹ️ Not ERC20: ${receipt.contractAddress}`);
+              }
 
-        //       // Debug log before saving
-        //       console.log("📝 Saving contract to DB:", {
-        //         address: receipt.contractAddress,
-        //         creator: tx.from,
-        //         block: block.number,
-        //         timestamp: block.timestamp,
-        //         type: isERC20 ? "ERC20" : "other",
-        //         symbol,
-        //         totalSupply,
-        //         decimals,
-        //       });
+              // Debug log before saving
+              console.log("📝 Saving contract to DB:", {
+                address: receipt.contractAddress,
+                creator: tx.from,
+                block: block.number,
+                timestamp: block.timestamp,
+                type: isERC20 ? "ERC20" : "other",
+                symbol,
+                totalSupply,
+                decimals,
+              });
 
-        //       try {
-        //         const [result] = await db.execute(
-        //           `INSERT INTO contracts
-        //             (address, creator, blockNumber, timestamp, type, symbol, isVerified, totalSupply, decimals)
-        //            VALUES (?, ?, ?, FROM_UNIXTIME(?), ?, ?, ?, ?, ?)
-        //            ON DUPLICATE KEY UPDATE
-        //              blockNumber = VALUES(blockNumber),
-        //              timestamp = VALUES(timestamp),
-        //              type = VALUES(type),
-        //              symbol = VALUES(symbol),
-        //              totalSupply = VALUES(totalSupply),
-        //              decimals = VALUES(decimals)`,
-        //           [
-        //             receipt.contractAddress,
-        //             tx.from,
-        //             block.number,
-        //             block.timestamp,
-        //             isERC20 ? "ERC20" : "other",
-        //             symbol,
-        //             false,
-        //             totalSupply,
-        //             decimals,
-        //           ]
-        //         );
+              try {
+                const [result] = await db.execute(
+                  `INSERT INTO contracts
+                    (address, creator, blockNumber, timestamp, type, symbol, isVerified, totalSupply, decimals)
+                   VALUES (?, ?, ?, FROM_UNIXTIME(?), ?, ?, ?, ?, ?)
+                   ON DUPLICATE KEY UPDATE
+                     blockNumber = VALUES(blockNumber),
+                     timestamp = VALUES(timestamp),
+                     type = VALUES(type),
+                     symbol = VALUES(symbol),
+                     totalSupply = VALUES(totalSupply),
+                     decimals = VALUES(decimals)`,
+                  [
+                    receipt.contractAddress,
+                    tx.from,
+                    block.number,
+                    block.timestamp,
+                    isERC20 ? "ERC20" : "other",
+                    symbol,
+                    false,
+                    totalSupply,
+                    decimals,
+                  ]
+                );
 
-        //         console.log("✅ DB insert/update result:", result);
-        //         console.log(
-        //           `🆕 Contract detected: ${receipt.contractAddress} (type: ${
-        //             isERC20 ? "ERC20" : "other"
-        //           }, symbol: ${symbol || "-"})`
-        //         );
-        //       } catch (dbErr) {
-        //         console.error(
-        //           `❌ DB error for contract ${receipt.contractAddress}:`,
-        //           dbErr
-        //         );
-        //       }
-        //     }
-        //   } catch (err) {
-        //     console.error("❌ Error processing contract creation:", err);
-        //   }
-        // }
+                console.log("✅ DB insert/update result:", result);
+                console.log(
+                  `🆕 Contract detected: ${receipt.contractAddress} (type: ${
+                    isERC20 ? "ERC20" : "other"
+                  }, symbol: ${symbol || "-"})`
+                );
+              } catch (dbErr) {
+                console.error(
+                  `❌ DB error for contract ${receipt.contractAddress}:`,
+                  dbErr
+                );
+              }
+            }
+          } catch (err) {
+            console.error("❌ Error processing contract creation:", err);
+          }
+        }
       }
 
       console.log(
@@ -1255,11 +1258,12 @@ app.get("/api/tokens", authenticate, rateLimiter, async (req, res) => {
 
 app.get("/api/fix", authenticate, rateLimiter, async (req, res) => {
   try {
-    await indexContractsFromChain(web3);
+    await indexTransactionsFromChain(web3);
     res.status(200).json({
       message: "FIXING COMPLETED",
     });
   } catch (error) {
+    console.log(error);
     res.status(500).json({ error: "Fix failed", err: error });
   }
 });

@@ -518,6 +518,78 @@ async function indexContractsFromChain(web3, fromBlock = 100000, toBlock = "late
   }
 }
 
+async function indexTransactionsFromChain(web3, fromBlock = 0, toBlock = "latest") {
+  try {
+    const latestBlock = toBlock === "latest" ? await web3.eth.getBlockNumber() : toBlock;
+
+    const db = getDbPool();
+
+    const step = 100; // adjust batch size depending on RPC
+    for (let start = fromBlock; start <= latestBlock; start += step) {
+      const end = Math.min(start + step - 1, latestBlock);
+      console.log(`📦 Scanning blocks ${start} → ${end}`);
+
+      // Fetch blocks in parallel with transactions included
+      const blocks = await Promise.all(
+        Array.from({ length: end - start + 1 }, (_, i) =>
+          web3.eth.getBlock(start + i, true)
+        )
+      );
+
+      for (const block of blocks) {
+        if (!block || !block.transactions || block.transactions.length < 1) continue;
+
+        for (const tx of block.transactions) {
+          try {
+            const receipt = await web3.eth.getTransactionReceipt(tx.hash);
+            if (!receipt) continue;
+
+            const value = web3.utils.fromWei(tx.value, "ether"); // store in ether for readability
+            const gas = receipt.gasUsed?.toString() || tx.gas?.toString() || "0";
+            const gasPrice = tx.gasPrice?.toString() || "0";
+
+            try {
+              await db.execute(
+                `INSERT INTO transactions
+                   (hash, blockNumber, fromAddress, toAddress, value, gas, gasPrice, timestamp)
+                 VALUES (?, ?, ?, ?, ?, ?, ?, FROM_UNIXTIME(?))
+                 ON DUPLICATE KEY UPDATE
+                   blockNumber = VALUES(blockNumber),
+                   fromAddress = VALUES(fromAddress),
+                   toAddress = VALUES(toAddress),
+                   value = VALUES(value),
+                   gas = VALUES(gas),
+                   gasPrice = VALUES(gasPrice),
+                   timestamp = VALUES(timestamp)`,
+                [
+                  tx.hash,
+                  tx.blockNumber,
+                  tx.from,
+                  tx.to,
+                  value,
+                  gas,
+                  gasPrice,
+                  block.timestamp,
+                ]
+              );
+              console.log(`✅ Tx saved: ${tx.hash}`);
+            } catch (dbErr) {
+              console.error(`❌ DB error for tx ${tx.hash}:`, dbErr);
+            }
+          } catch (err) {
+            console.error(`❌ Error processing tx ${tx.hash}:`, err.message);
+          }
+        }
+      }
+    }
+
+    console.log("✅ Initial transaction indexing finished.");
+  } catch (err) {
+    console.error("❌ Error indexing transactions:", err);
+  }
+}
+
+
 module.exports = {
   getTokenBalance,
   getAllTokenBalances,
@@ -525,5 +597,6 @@ module.exports = {
   getTokenHolders,
   getKnownTokenContracts,
   indexContractsFromChain,
-  ERC20_ABI
+  ERC20_ABI,
+  indexTransactionsFromChain
 };
