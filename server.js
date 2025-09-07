@@ -20,6 +20,7 @@ const {
   getKnownTokenContracts,
   indexContractsFromChain,
   indexTransactionsFromChain,
+  getDataBaseTransactions,
 } = require("./utils");
 
 
@@ -711,120 +712,155 @@ const io = socketIo(server, {
 
 web3Ws.eth
   .subscribe("newBlockHeaders")
-  .on("connected", () =>
-    console.log("🔗 Connected to WebSocket node (Validator)")
-  )
+  .on("connected", () => {
+    console.log("🔗 Connected to WebSocket node (Validator)");
+  })
   .on("data", async (blockHeader) => {
+    // console.log(`📦 New block header received: #${blockHeader.number}`);
+
     try {
       const block = await web3Ws.eth.getBlock(blockHeader.number, true);
-      if (!block || block.transactions.length < 1) return;
+      if (!block) {
+        console.warn(`⚠️ Could not fetch block ${blockHeader.number}`);
+        return;
+      }
+
+      // console.log(
+      //   `📌 Processing block ${block.number} (${block.transactions.length} txs)`
+      // );
+
+      if (block.transactions.length < 1) return;
 
       for (const tx of block.transactions) {
-        // Save transaction
-        const txSaved = await db.execute(
-          `INSERT IGNORE INTO transactions 
-            (hash, blockNumber, fromAddress, toAddress, value, gas, gasPrice, timestamp)
-           VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
-          [
-            tx.hash,
-            tx.blockNumber,
-            tx.from,
-            tx.to,
-            tx.value,
-            tx.gas,
-            tx.gasPrice,
-            new Date(block.timestamp * 1000).toISOString(),
-          ]
-        );
+        console.log(`➡️ Processing TX: ${tx.hash}`);
 
-        console.log("Saved TX", txSaved);
+        try {
+          const [result] = await db.execute(
+            `INSERT INTO transactions 
+              (hash, blockNumber, fromAddress, toAddress, value, gas, gasPrice, timestamp)
+             VALUES (?, ?, ?, ?, ?, ?, ?, FROM_UNIXTIME(?))
+              ON DUPLICATE KEY UPDATE
+                blockNumber = VALUES(blockNumber),
+                fromAddress = VALUES(fromAddress),
+                toAddress = VALUES(toAddress),
+                value = VALUES(value),
+                gas = VALUES(gas),
+                gasPrice = VALUES(gasPrice),
+                timestamp = VALUES(timestamp)`,
+            [
+              tx.hash,
+              tx.blockNumber,
+              tx.from,
+              tx.to,
+              tx.value,
+              tx.gas,
+              tx.gasPrice,
+              block.timestamp, // ✅ pass UNIX timestamp (NOT ISO string)
+            ]
+          );
 
-        // Detect contract creation (to == null)
-        if (!tx.to) {
-          try {
-            const receipt = await web3Ws.eth.getTransactionReceipt(tx.hash);
-            if (receipt && receipt.contractAddress) {
-              let isERC20 = false;
-              let symbol = null;
-              let totalSupply = null;
-              let decimals = null;
-
-              try {
-                const contract = new web3Ws.eth.Contract(
-                  require("./utils").ERC20_ABI,
-                  receipt.contractAddress
-                );
-
-                totalSupply = await contract.methods.totalSupply().call();
-                symbol = await contract.methods.symbol().call();
-                decimals = await contract.methods.decimals().call();
-                isERC20 = true;
-              } catch (e) {
-                console.log(`ℹ️ Not ERC20: ${receipt.contractAddress}`);
-              }
-
-              // Debug log before saving
-              console.log("📝 Saving contract to DB:", {
-                address: receipt.contractAddress,
-                creator: tx.from,
-                block: block.number,
-                timestamp: block.timestamp,
-                type: isERC20 ? "ERC20" : "other",
-                symbol,
-                totalSupply,
-                decimals,
-              });
-
-              try {
-                const [result] = await db.execute(
-                  `INSERT INTO contracts
-                    (address, creator, blockNumber, timestamp, type, symbol, isVerified, totalSupply, decimals)
-                   VALUES (?, ?, ?, FROM_UNIXTIME(?), ?, ?, ?, ?, ?)
-                   ON DUPLICATE KEY UPDATE
-                     blockNumber = VALUES(blockNumber),
-                     timestamp = VALUES(timestamp),
-                     type = VALUES(type),
-                     symbol = VALUES(symbol),
-                     totalSupply = VALUES(totalSupply),
-                     decimals = VALUES(decimals)`,
-                  [
-                    receipt.contractAddress,
-                    tx.from,
-                    block.number,
-                    block.timestamp,
-                    isERC20 ? "ERC20" : "other",
-                    symbol,
-                    false,
-                    totalSupply,
-                    decimals,
-                  ]
-                );
-
-                console.log("✅ DB insert/update result:", result);
-                console.log(
-                  `🆕 Contract detected: ${receipt.contractAddress} (type: ${
-                    isERC20 ? "ERC20" : "other"
-                  }, symbol: ${symbol || "-"})`
-                );
-              } catch (dbErr) {
-                console.error(
-                  `❌ DB error for contract ${receipt.contractAddress}:`,
-                  dbErr
-                );
-              }
-            }
-          } catch (err) {
-            console.error("❌ Error processing contract creation:", err);
-          }
+          console.log(
+            `✅ TX saved [hash: ${tx.hash}] - Result:`,
+            JSON.stringify(result)
+          );
+        } catch (dbTxErr) {
+          console.error(
+            `❌ DB error while saving TX ${tx.hash}:`,
+            dbTxErr.message
+          );
         }
+
+        // Detect contract creation
+        // if (!tx.to) {
+        //   console.log(`🔍 TX ${tx.hash} is contract creation, checking receipt...`);
+
+        //   try {
+        //     const receipt = await web3Ws.eth.getTransactionReceipt(tx.hash);
+
+        //     if (receipt && receipt.contractAddress) {
+        //       console.log(
+        //         `📜 Contract created at ${receipt.contractAddress} (from ${tx.from})`
+        //       );
+
+        //       let isERC20 = false;
+        //       let symbol = null;
+        //       let totalSupply = null;
+        //       let decimals = null;
+
+        //       try {
+        //         const contract = new web3Ws.eth.Contract(
+        //           require("./utils").ERC20_ABI,
+        //           receipt.contractAddress
+        //         );
+
+        //         totalSupply = await contract.methods.totalSupply().call();
+        //         symbol = await contract.methods.symbol().call();
+        //         decimals = await contract.methods.decimals().call();
+        //         isERC20 = true;
+
+        //         console.log(
+        //           `💰 ERC20 detected [symbol: ${symbol}, supply: ${totalSupply}, decimals: ${decimals}]`
+        //         );
+        //       } catch (e) {
+        //         console.log(`ℹ️ Not ERC20: ${receipt.contractAddress}`);
+        //       }
+
+        //       console.log("📝 Attempting to save contract to DB...");
+
+        //       try {
+        //         const [result] = await db.execute(
+        //           `INSERT INTO contracts
+        //             (address, creator, blockNumber, timestamp, type, symbol, isVerified, totalSupply, decimals)
+        //            VALUES (?, ?, ?, FROM_UNIXTIME(?), ?, ?, ?, ?, ?)
+        //            ON DUPLICATE KEY UPDATE
+        //              blockNumber = VALUES(blockNumber),
+        //              timestamp = VALUES(timestamp),
+        //              type = VALUES(type),
+        //              symbol = VALUES(symbol),
+        //              totalSupply = VALUES(totalSupply),
+        //              decimals = VALUES(decimals)`,
+        //           [
+        //             receipt.contractAddress,
+        //             tx.from,
+        //             block.number,
+        //             block.timestamp,
+        //             isERC20 ? "ERC20" : "other",
+        //             symbol,
+        //             false,
+        //             totalSupply,
+        //             decimals,
+        //           ]
+        //         );
+
+        //         console.log(
+        //           `✅ Contract saved: ${receipt.contractAddress}, result:`,
+        //           JSON.stringify(result)
+        //         );
+        //       } catch (dbErr) {
+        //         console.error(
+        //           `❌ DB error for contract ${receipt.contractAddress}:`,
+        //           dbErr.message
+        //         );
+        //       }
+        //     }
+        //   } catch (err) {
+        //     console.error(
+        //       `❌ Error fetching receipt for TX ${tx.hash}:`,
+        //       err.message
+        //     );
+        //   }
+        // }
       }
 
       console.log(
-        `✅ Indexed block ${block.number} (${block.transactions.length} txs)`
+        `🎯 Finished indexing block ${block.number} (${block.transactions.length} txs)`
       );
     } catch (err) {
-      console.error("❌ Error processing block:", err);
+      console.error("❌ Error processing block:", err.message);
     }
+  })
+  .on("error", (err) => {
+    console.error("❌ WebSocket subscription error:", err.message);
   });
 
 // Check if connected to the blockchain
@@ -996,62 +1032,6 @@ app.get("/api/blocks/:number", authenticate, rateLimiter, async (req, res) => {
   }
 });
 
-// Get latest transactions
-// app.get('/api/transactions', authenticate, rateLimiter, async (req, res) => {
-//   try {
-//     const page = parseInt(req.query.page) || 1;
-//     const limit = parseInt(req.query.limit) || 10;
-
-//     // Get latest block number
-//     const latestBlockNumber = await web3.eth.getBlockNumber();
-
-//     // Fetch transactions from latest blocks
-//     const transactions = [];
-//     let blockNumber = latestBlockNumber;
-//     let txCount = 0;
-
-//     while (txCount < limit && blockNumber >= 0) {
-//       const block = await web3.eth.getBlock(blockNumber, true);
-
-//       if (block && block.transactions) {
-//         // Add transactions from this block (in reverse order to get latest first)
-//         for (let i = block.transactions.length - 1; i >= 0 && txCount < limit; i--) {
-//           const tx = block.transactions[i];
-//           transactions.push({
-//             hash: tx.hash,
-//             blockNumber: tx.blockNumber,
-//             timestamp: new Date(block.timestamp * 1000).toISOString(),
-//             from: tx.from,
-//             to: tx.to,
-//             value: web3.utils.fromWei(tx.value, 'ether') + ' tUCC',
-//             gasUsed: tx.gas,
-//             status: 'success' // Assuming success for simplicity
-//           });
-//           txCount++;
-//         }
-//       }
-
-//       blockNumber--;
-
-//       // Safety check to prevent infinite loop
-//       if (latestBlockNumber - blockNumber > 100) {
-//         break;
-//       }
-//     }
-
-//     res.json({
-//       transactions,
-//       totalPages: Math.ceil(latestBlockNumber / limit),
-//       currentPage: page
-//     });
-//   } catch (error) {
-//     console.error('Error fetching transactions:', error);
-//     res.status(500).json({ error: 'Failed to fetch transactions' });
-//   }
-// });
-
-// Get transaction by hash
-
 app.get("/api/verified-tokens", authenticate, rateLimiter, async (req, res) => {
   try {
     const [rows] = await db.execute(`SELECT address FROM contracts WHERE isVerified = 1`);
@@ -1116,6 +1096,7 @@ app.get("/api/transactions", authenticate, rateLimiter, async (req, res) => {
     res.status(500).json({ error: "Failed to fetch transactions" });
   }
 });
+
 
 // Get contracts
 // app.get('/api/contracts', rateLimiter, async (req, res) => {
@@ -1258,9 +1239,12 @@ app.get("/api/tokens", authenticate, rateLimiter, async (req, res) => {
 
 app.get("/api/fix", authenticate, rateLimiter, async (req, res) => {
   try {
-    await indexTransactionsFromChain(web3);
+    // await indexTransactionsFromChain(web3);
+    console.log("AHh this should start here")
+    const response = await indexTransactionsFromChain(web3);
     res.status(200).json({
       message: "FIXING COMPLETED",
+      response
     });
   } catch (error) {
     console.log(error);

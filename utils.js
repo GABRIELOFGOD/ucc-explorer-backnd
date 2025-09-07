@@ -589,12 +589,30 @@ async function indexTransactionsFromChain(web3, fromBlock = 0, toBlock = "latest
   }
 }
 
+const getDataBaseTransactions = async () => {
+  console.log("Started")
+  try {
+    const db = getDbPool();
+    const all = await db.execute(
+      `SELECT * FROM transactions 
+         ORDER BY blockNumber DESC`
+    )
+    console.log("Started")
+
+    console.log("ALL", all);
+    return all;
+  } catch (error) {
+    console.log("ERROR", error);
+  }
+}
+
 
 module.exports = {
   getTokenBalance,
   getAllTokenBalances,
   getTokenTransactions,
   getTokenHolders,
+  getDataBaseTransactions,
   getKnownTokenContracts,
   indexContractsFromChain,
   ERC20_ABI,
